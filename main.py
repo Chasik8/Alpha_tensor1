@@ -1,119 +1,232 @@
-import pygad.torchga
-import torch
-from model import *
-import numpy as np
+import itertools
 import random
-from copy import deepcopy
+import sys
 import time
 
+# import pygame as pg
+# import torch
+import numpy as np
+from math import *
 
-def Run():
-    device = "cuda:0"
-    # net = Net()
-    # torch_ga = pygad.torchga.TorchGA(model=net.out_model(), num_solutions=10)
-    kol_model = 10
-    torch_ga = []
-    for i in range(kol_model):
-        torch_ga.append([0, Net().to(device), 0])
-    # for i in range(kol_model):
-    #     torch_ga[i] += torch.optim.Adam(torch_ga[i][1].parameters())
-    # criterion = nn.MSELoss(size_average=None, reduce=None, reduction='mean')
-    x_train = [1, 8, 64, 512, 4096, 32768, 262144, 2097152]
-    for i in range(8):
-        x_train[i] /= 8 ** 7
-    x_train_torch = torch.from_numpy(np.array(x_train).astype(np.float32)).to(device)
-    y_train = [2101248, 16809984, 134479872, 1075838976]
-    sum_y_train = sum(y_train)
-    epoch = 100
-    md1 = 0
-    md2 = 0
-    tim = time.time()
-    for ep in range(epoch):
-        otw = [sum_y_train] * kol_model
-        for km in range(kol_model):
-            # kol_iter = 0
-            kol_iter_max = 100
-            while torch_ga[km][0] < kol_iter_max and otw[km] != 0:
-                x = torch_ga[km][1](x_train_torch)
-                x = x.cpu().detach().numpy()
-                a = 0
-                for i in range(4):
-                    if x[i] >= 0.5:
-                        a += x_train[i]
-                b = 0
-                for i in range(4, 8):
-                    if x[i] >= 0.5:
-                        a += x_train[i]
-                c = 0
-                ab = a * b
-                for i in range(8, 20, 3):
-                    if x[i] >= x[i + 1] and x[i] >= x[i + 2]:
-                        c += ab
-                    elif x[i + 2] >= x[i + 1] and x[i + 2] >= x[i]:
-                        c -= ab
-                otw[km] -= c
-                torch_ga[km][0] += 1
-            if torch_ga[km][0] == kol_iter_max:
-                torch_ga[km][2] = abs(otw[km])
-        # изменнение весов
-        # учшие модели-----------------------------------------------------------
-        max1 = 10000000000000
-        max2 = 10000000000000
-        maxdop1 = 1000000000000
-        maxdop2 = 1000000000000
-        maxi1 = 0
-        maxi2 = 0
-        for i in range(kol_model):
-            if torch_ga[i][0] < max1:
-                max2 = max1
-                maxi2 = maxi1
-                max1 = torch_ga[i][0]
-                maxi1 = i
-            elif torch_ga[i][0] < max2:
-                max2 = torch_ga[i][0]
-                maxi2 = i
-            elif torch_ga[i][0] == max1:
-                if torch_ga[i][2] <= maxdop1:
-                    maxdop2 = maxdop1
-                    max2 = max1
-                    maxi2 = maxi1
-                    maxdop1 = torch_ga[i][2]
-                    max1 = torch_ga[i][0]
-                    maxi1 = i
-            elif torch_ga[i][0] == max2:
-                if torch_ga[i][2] <= maxdop2:
-                    maxdop2 = torch_ga[i][2]
-                    max2 = torch_ga[i][0]
-                    maxi2 = i
-        #-----------------------------------------------------------
-        md1 = pygad.torchga.model_weights_as_vector(torch_ga[maxi1][1].model)
-        md2 = pygad.torchga.model_weights_as_vector(torch_ga[maxi2][1].model)
-        print(f"{ep} {torch_ga[maxi1][0]}")
-        for km in range(kol_model):
-            md = deepcopy(md1)
-            for i in range(len(md1)):
-                dop1 = random.uniform(0, 1)
-                if 0.45 <= dop1 < 0.9:
-                    md[i] = md2[i]
-                else:
-                    md[i] = random.uniform(-1, 1)
-            torch_ga[km][0] = 0
-            torch_ga[km][1].model.load_state_dict(
-                pygad.torchga.model_weights_as_dict(model=torch_ga[km][1].model, weights_vector=md))
-    net = Net()
-    net.model.load_state_dict(
-        pygad.torchga.model_weights_as_dict(model=net.model, weights_vector=md1))
-    torch.save(net, "models\model1.pth")
-    print(time.time() - tim)
+# from model import *
+from copy import deepcopy
+from graphviz import Digraph
+import pickle
+from tqdm import tqdm
+import json
 
-    # torch_ga[km][1].model.load_state_dict(
-    #     pygad.torchga.model_weights_as_dict(model=torch_ga[km][1].model, weights_vector=pr))
-    # p = pygad.torchga.model_weights_as_vector(torch_ga[km][1].model)
-    print("YES")
+Value = 0
+
+
+class Derevo:
+    def __init__(self, u, v, q, flag, pred):
+        if pred != -1:
+            self.depth = pred.depth + 1
+        else:
+            self.depth = 0
+        self.n = 1
+        self.w = 0
+        self.u = np.array(u, dtype=np.int8).tobytes()
+        self.v = np.array(v, dtype=np.int8).tobytes()
+        self.q = np.array(q, dtype=np.int8).tobytes()
+        self.pred = pred
+        self.sled = list()
+        self.flag = flag
+        global Value
+        self.value = Value
+        Value += 1
+
+    def sv(self):
+        dop = [self.n, self.w, self.flag, self.value] + [self.u, self.v, self.q]
+        if self.pred != -1:
+            dop += [self.pred.value]
+        else:
+            dop += [self.pred]
+        dop += [i.value for i in self.sled]
+        # print(sys.getsizeof(dop))
+        return dop
+
+    def load(self, l, data):
+        self.n = l[0]
+        self.w = l[1]
+        self.flag = l[2]
+        self.value = l[3]
+        self.u = l[4]
+        self.v = l[5]
+        self.q = l[6]
+        self.pred = data[l[7]]
+        self.sled = []
+        for i in l[8:]:
+            self.sled.append(data[i])
+
+    def pole(self):
+        global POLE
+        dop = deepcopy(POLE) - np.multiply.outer(np.multiply.outer(
+            np.frombuffer(self.u, np.int8).ravel(), np.frombuffer(self.v, np.int8).ravel()),
+            np.frombuffer(self.q, np.int8).ravel())
+        it = self.pred
+        while it != -1:
+            dop -= np.multiply.outer(np.multiply.outer(
+                np.frombuffer(it.u, np.int8).ravel(), np.frombuffer(it.v, np.int8).ravel()),
+                np.frombuffer(it.q, np.int8).ravel())
+            it = it.pred
+        return dop
+
+
+def fun(C, T, i):
+    return i.w / i.n + C * sqrt(log(T) / i.n)
+
+
+def new(derevo):
+    global N
+    # U = itertools.product([-1, 0, 1], repeat=N ** 2)
+    # V = itertools.product([-1, 0, 1], repeat=N ** 2)
+    # W = itertools.product([-1, 0, 1], repeat=N ** 2)
+    flag = True
+    if derevo.depth == N ** 3 - 2:
+        flag = False
+    for u in itertools.product([-1, 0, 1], repeat=N ** 2):
+        for v in itertools.product([-1, 0, 1], repeat=N ** 2):
+            for w in itertools.product([-1, 0, 1], repeat=N ** 2):
+                derevo.sled.append(Derevo(u, v, w, flag, derevo))
+    return flag
+
+
+def if_game(pole, num, Value):
+    global N
+    if num < N ** 3 - 1:
+        if (pole == np.zeros((N ** 2, N ** 2, N ** 2), dtype=np.int8)).all():
+            print("YES")
+            print(Value)
+            return 1
+        else:
+            return 0
+    return 0
+
+
+def win(derevo):
+    global N
+    return derevo.sled[random.randint(0, (N ** 2) ** 3)]
+    # sw = [i for i in range((N ** 2) ** 3)]
+    # random.shuffle(sw)
+    # for i in sw:
+    #     derevo = derevo.sled[i]
+    #     return derevo
+
+
+def mod(derevo):
+    p = if_game(derevo.pole(), derevo.depth, derevo.value)
+    flag = True
+    while p == 0 and flag:
+        if len(derevo.sled) == 0:
+            flag = new(derevo)
+        derevo = win(derevo)
+        p = if_game(derevo.pole(), derevo.depth, derevo.value)
+    return derevo, p
+
+
+def back(derevo, hod):
+    kef = 0
+    if hod == 1:
+        kef = 1
+    while derevo.pred != -1:
+        derevo.w += kef
+        derevo.n += 1
+        derevo = derevo.pred
+
+
+def draw(derevo, C, T):
+    def format(node):
+        s = f"{str(fun(C, T, node))[:3]}"
+        return s
+
+    def add_edges(graph, node):
+        for i in node.sled:
+            graph.edge(str(node.value), str(i.value), label=f"{format(i)}")
+            add_edges(graph, i)
+
+    def visualize_tree(root):
+        graph = Digraph()
+        add_edges(graph, root)
+        graph.render(r'tree', format='svg', cleanup=True)
+
+    visualize_tree(derevo)
+
+
+def save(sv, kor):
+    sv[kor.value] = kor.sv()
+    # a=sys.getsizeof(kor.u.tobytes())
+    # b=sys.getsizeof([kor.u.tobytes(), kor.v.tobytes(), kor.w.tobytes()])
+    for i in kor.sled:
+        sv = save(sv, i)
+    return sv
+
+
+def init_pole():
+    global N
+    pole = [[[0] * N ** 2 for i in range(N ** 2)] for j in range(N ** 2)]
+    for i in range(N):
+        for j in range(N):
+            for k in range(N):
+                pole[i * N + k][k * N + j][i * N + j] = 1
+    for i in range(N ** 2):
+        for j in range(N ** 2):
+            print(*pole[i][j])
+        print('------------------------------------------------------------------')
+    return np.array(pole, dtype=np.int8)
+
+
+N = 2
+POLE = init_pole()
+
+
+def Game():
+    global N
+    C = sqrt(2)
+    T = 0
+    kor = Derevo([0] * N ** 2, [0] * N ** 2, [0] * N ** 2, True, -1)
+    epoch_kol = 10
+    print(epoch_kol / 3 ** (N ** 3 * N ** 2 * 3))
+    for epoch in tqdm(range(epoch_kol)):
+        derevo = kor
+        while len(derevo.sled) > 0:
+            ma = -(10 ** 10)
+            mai = 0
+            for i in derevo.sled:
+                if i.flag:
+                    s = fun(C, T, i)
+                    if s > ma:
+                        ma = s
+                        mai = i
+            derevo = mai
+        derevo, p = mod(derevo)
+        T += 1
+        back(derevo, p)
+    global Value
+    print(Value)
+    # print(sys.getsizeof(kor))
+    # print(sys.getsizeof(json.dumps(kor)))
+    # draw(kor, C, T)
+    # print("draw")
+    data = [0] * Value
+    file = {
+        "data": save(data, kor),
+        "C": C,
+        "epoch_kol": epoch_kol,
+    }
+    # with open('data.txt', 'w') as ff:
+    #     for i in file["data"]:
+    #         for j in i:
+    #             ff.write(f"{str(j)} ")
+    #         ff.write('\n')
+    print(T, len(file["data"]), sys.getsizeof(file["data"]))
+    with open('data.pickle', 'wb') as ff:
+        pickle.dump(file, ff, pickle.HIGHEST_PROTOCOL)
+        # pickle.dump(file, ff, -1)
 
 
 def print_hi(name):
-    Run()
+    Game()
 
 
 if __name__ == '__main__':
